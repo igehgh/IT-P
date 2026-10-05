@@ -1458,7 +1458,7 @@
   $('#import-file').addEventListener('change',async e=>{const file=e.target.files?.[0];e.target.value='';if(!file)return;try{if(file.size>150*1024*1024)throw Error('文件超过 150 MB。');showImportBackup(JSON.parse(await file.text()),file.name)}catch(err){toast('导入失败：'+err.message)}});
   for(const inputId of ['archive-photo-file','archive-photo-camera'])$('#'+inputId).addEventListener('change',e=>{const files=[...e.target.files||[]];e.target.value='';if(files.length)addArchivePhotos(files)});
   // Public browser configuration only. Never put a secret/service_role key here.
-  const CLOUD_DEFAULT={url:'',key:''};
+  const CLOUD_DEFAULT={"url":"https://xdfprofjvijcvsquoeie.supabase.co","key":"sb_publishable_HOiPATlMfPZyd0yZHKohwQ_5Z_uIvNr"};
   let cloudConfig=CLOUD_DEFAULT;
   try{cloudConfig=JSON.parse(localStorage.getItem('dit-cloud-config')||'null')||CLOUD_DEFAULT}catch{}
   const cloud={client:null,user:null,rows:{},roles:{},conflicts:{},busy:false,loading:false,timer:null,channel:null,status:'',accountKey:'',sessionGeneration:0};
