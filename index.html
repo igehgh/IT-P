@@ -1711,9 +1711,11 @@
   $('#import-file').addEventListener('change',async e=>{const file=e.target.files?.[0];e.target.value='';if(!file)return;try{if(file.size>150*1024*1024)throw Error('文件超过 150 MB。');showImportBackup(JSON.parse(await file.text()),file.name)}catch(err){toast('导入失败：'+err.message)}});
   for(const inputId of ['archive-photo-file','archive-photo-camera'])$('#'+inputId).addEventListener('change',e=>{const files=[...e.target.files||[]];e.target.value='';if(files.length)addArchivePhotos(files)});
   // Public browser configuration only. Never put a secret/service_role key here.
-  const CLOUD_DEFAULT={"url":"https://xdfprofjvijcvsquoeie.supabase.co","key":"sb_publishable_HOiPATlMfPZyd0yZHKohwQ_5Z_uIvNr"};
+  // 默认回退到原 Supabase 项目；若网页由自建云库托管，cloudAutoDetect() 会自动改连同源云库。
+  const CLOUD_DEFAULT={"url":"https://wudlwffzhtyypvdeacuz.supabase.co","key":"sb_publishable_LukYLbGF6e5T55Q1TjqmlA_DEvhubfV"};
   let cloudConfig=CLOUD_DEFAULT;
   try{cloudConfig=JSON.parse(localStorage.getItem('dit-cloud-config')||'null')||CLOUD_DEFAULT}catch{}
+  const cloudConfigExplicit=!!localStorage.getItem('dit-cloud-config');
   const cloud={client:null,user:null,rows:{},roles:{},conflicts:{},busy:false,loading:false,timer:null,channel:null,status:'',accountKey:'',sessionGeneration:0};
   const localRead=localStateStore.read.bind(localStateStore),localWrite=localStateStore.write.bind(localStateStore);
   let localSnapshot=null;
@@ -1722,7 +1724,9 @@
   function cloudError(error){
     const msg=error?.message||String(error);
     if(msg.includes('CONFLICT'))return '其他成员已修改这个项目，请先处理版本冲突。';
-    if(msg.includes('MEMBER_MUST_REGISTER'))return '请让对方先在本网页注册账号。';
+    if(msg.includes('MEMBER_MUST_REGISTER'))return '对方账号还不存在。CloudBase 需先在控制台「用户管理」创建该账号，再添加为成员。';
+    if(/登录已过期/.test(msg))return msg;
+    if(/不支持仅传入用户名/i.test(msg))return 'CloudBase 不支持网页内注册，请在控制台创建账号。';
     if(/PERMISSION|OWNER_REQUIRED/.test(msg))return '你目前没有执行此操作的权限。';
     if(/Invalid login credentials/.test(msg))return '邮箱或密码不正确。';
     if(/Email not confirmed/.test(msg))return '请先在邮箱中确认注册。';
@@ -1761,12 +1765,26 @@
   function cloudSchedule(){
     clearTimeout(cloud.timer);if(cloud.user&&!cloud.loading)cloud.timer=setTimeout(()=>cloudSync().catch(e=>{cloud.status=cloudError(e);renderStatus()}),900);
   }
+  const isSupabaseHost=url=>/^https:\/\/[a-z0-9-]+\.supabase\.co\/?$/.test(url||'');
+  const isCloudBaseHost=url=>/^https:\/\/[a-z0-9-]+\.api\.tcloudbasegateway\.com\/?$/.test(url||'');
   async function cloudClient(){
     if(cloud.client)return cloud.client;
-    if(!/^https:\/\/[a-z0-9-]+\.supabase\.co\/?$/.test(cloudConfig.url)||!cloudConfig.key?.startsWith('sb_publishable_'))throw Error('请填写 Supabase Project URL 和 Publishable key。');
+    const isCloudBase=isCloudBaseHost(cloudConfig.url),isSelfHosted=!isCloudBase&&!isSupabaseHost(cloudConfig.url);
+    if(isSelfHosted){
+      if(!/^https?:\/\/[^\s/]+(\/|$)/.test(cloudConfig.url||''))throw Error('请填写云库地址，例如 http://192.168.1.10:8787');
+      if(!cloudConfig.key)throw Error('请填写连接密钥；自建云库可填 local。');
+    }else if(isCloudBase){
+      if(!/^https:\/\/[a-z0-9-]+\.api\.tcloudbasegateway\.com\/?$/.test(cloudConfig.url))throw Error('CloudBase 地址应为 https://环境ID.api.tcloudbasegateway.com');
+      if(!cloudConfig.key||cloudConfig.key.length<40)throw Error('请填写 CloudBase 的 Publishable Key（环境管理 → API 密钥）。');
+    }else if(!cloudConfig.key?.startsWith('sb_publishable_')){
+      throw Error('请填写 Supabase Project URL 和 Publishable key。');
+    }
     if(!window.supabase){await new Promise((resolve,reject)=>{
-      const script=document.createElement('script');script.src='https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js';
-      script.onload=resolve;script.onerror=()=>{script.remove();reject(Error('无法加载同步组件，请检查网络后重试。'))};document.head.appendChild(script);
+      const script=document.createElement('script');
+      script.src=isSupabaseHost(cloudConfig.url)?'supabase.js'
+        :isCloudBase?'cloudbase-shim.js'
+        :new URL('/supabase-shim.js',cloudConfig.url.replace(/\/$/,'')+'/').href;
+      script.onload=resolve;script.onerror=()=>{script.remove();reject(Error(isCloudBase?'无法加载 CloudBase 适配层 cloudbase-shim.js，请确认它和 index.html 在同一目录。':isSelfHosted?'无法加载本地同步组件，请确认云库服务已启动。':'无法加载同步组件，请检查网络后重试。'))};document.head.appendChild(script);
     })}
     cloud.client=window.supabase.createClient(cloudConfig.url,cloudConfig.key,{auth:{storageKey:'dit-auth-'+new URL(cloudConfig.url).hostname,detectSessionInUrl:false}});
     cloud.client.auth.onAuthStateChange((event,session)=>{
@@ -1892,9 +1910,10 @@
       modal('账号 / 同步',`<p>${esc(cloud.user.email)}</p><p>${esc(cloud.status)}</p>${button('立即同步','cloud-sync')}${button('退出云端账号','cloud-logout')} ${conflicts.map(key=>`<div class="notice"><p>${esc(state.projects.find(p=>p.id===key)?.name||key)}：云端和本机都已修改。</p>${button('导出本机版本','cloud-conflict-export','small',`data-id="${esc(key)}"`)}${button('采用云端版本','cloud-conflict-reload','small',`data-id="${esc(key)}"`)}</div>`).join('')}`, '关闭',{mode:'cloud-close'});return;
     }
     if(!cloudConfig.url||!cloudConfig.key)return cloudSettings();
-    modal('云端登录',`<div class="form-grid">${field('email','邮箱','','','email','full')}${field('password','密码（至少 8 位）','','','password','full')}<p class="full">首次使用请注册；注册后按邮件提示确认邮箱。</p>${button('注册账号','cloud-signup')}${button('连接设置','cloud-settings')}</div>`,'登录',{mode:'cloud-login'});
+    const isCB=isCloudBaseHost(cloudConfig.url);
+    modal('云端登录',`<div class="form-grid">${field('email',isCB?'用户名':'邮箱','','','text','full')}${field('password','密码',isCB?'':'至少 8 位','','password','full')}<p class="full">${isCB?'CloudBase 不支持网页内注册。请先在控制台「用户管理」里创建账号，再回到这里登录。':'首次使用请注册；注册后按邮件提示确认邮箱。'}</p>${isCB?'':button('注册账号','cloud-signup')}${button('连接设置','cloud-settings')}</div>`,'登录',{mode:'cloud-login'});
   }
-  function cloudSettings(){modal('连接 Supabase',`<div class="form-grid">${field('url','Project URL',cloudConfig.url,'https://项目编号.supabase.co','url','full')}${field('key','Publishable key',cloudConfig.key,'以 sb_publishable_ 开头','text','full')}</div>`,'保存连接设置',{mode:'cloud-config'})}
+  function cloudSettings(){modal('连接云库',`<div class="form-grid">${field('url','云库地址',cloudConfig.url,'CloudBase：https://环境ID.api.tcloudbasegateway.com','text','full')}${field('key','连接密钥',cloudConfig.key,'CloudBase 填 Publishable Key；自建云库填 local','text','full')}<p class="full">三种云端都支持：<br>· <b>CloudBase</b>（国内直连、免代理）→ 填 <code>https://环境ID.api.tcloudbasegateway.com</code> 和 Publishable Key<br>· <b>自建云库</b> → 填局域网地址，密钥填 local<br>· <b>Supabase</b> → 填项目地址和 sb_publishable_ 密钥（国内需代理）</p></div>`,'保存连接设置',{mode:'cloud-config'})}
   async function cloudMembers(){
     const p=project();if(!cloud.user||!p||isBuiltinExample(p)||cloud.roles[p.id]!=='owner'){toast('请打开你创建的云端项目。');return}
     const {data,error}=await cloud.client.rpc('dit_list_members',{p_id:p.id});if(error)throw error;
@@ -1903,8 +1922,17 @@
   async function cloudForm(form){
     const data=Object.fromEntries(new FormData(form)),mode=form.dataset.mode;
     if(mode==='cloud-config'){
-      if(!/^https:\/\/[a-z0-9-]+\.supabase\.co\/?$/.test(data.url)||!data.key.startsWith('sb_publishable_'))throw Error('连接信息格式不正确。只可使用 Publishable key。');
-      cloudConfig={url:data.url.replace(/\/$/,''),key:data.key.trim()};localStorage.setItem('dit-cloud-config',JSON.stringify(cloudConfig));cloud.client=null;close();cloudAccount();return;
+      const url=String(data.url||'').trim().replace(/\/$/,''),key=String(data.key||'').trim();
+      if(isSupabaseHost(url)){
+        if(!key.startsWith('sb_publishable_'))throw Error('Supabase 只可使用 Publishable key。');
+      }else if(isCloudBaseHost(url)){
+        if(key.length<40)throw Error('请填写 CloudBase 的 Publishable Key（环境管理 → API 密钥）。');
+      }else if(!/^https?:\/\/[^\s/]+(:\d+)?(\/|$)/.test(url)){
+        throw Error('云库地址格式不正确，例如 https://环境ID.api.tcloudbasegateway.com');
+      }
+      if(!key)throw Error('请填写连接密钥；自建云库可填 local。');
+      cloudConfig={url,key};localStorage.setItem('dit-cloud-config',JSON.stringify(cloudConfig));
+      cloud.client=null;try{delete window.supabase}catch{}close();cloudAccount();return;
     }
     if(mode==='cloud-close'){close();return}
     const client=await cloudClient();
@@ -1964,7 +1992,21 @@
   const localClose=close;
   close=function(){localClose();if(cloud.user)cloudSchedulePull()};
   document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible'&&cloud.user)cloudSchedulePull()});
+  // 若本网页就由自建云库托管（同源存在 /api/health），自动把云端指向当前源，现场零配置。
+  async function cloudAutoDetect(){
+    if(!/^https?:$/.test(location.protocol))return;
+    try{
+      const res=await fetch('/api/health',{cache:'no-store'});
+      if(!res.ok)return;
+      const info=await res.json();
+      if(!info?.ok)return;
+      cloudConfig={url:location.origin,key:'local'};
+      try{localStorage.setItem('dit-cloud-config',JSON.stringify(cloudConfig))}catch{}
+    }catch{}
+  }
   async function cloudRestore(){
+    // 只有默认配置为空时才自动探测同源云库，避免把已配置好的 Supabase 覆盖成自建云库
+    if(!cloudConfigExplicit&&!CLOUD_DEFAULT.url)await cloudAutoDetect();
     if(!cloudConfig.url||!cloudConfig.key)return;
     try{const client=await cloudClient(),{data}=await client.auth.getSession();if(data.session)await cloudEnter(data.session.user)}catch(error){toast(cloudError(error))}
   }
