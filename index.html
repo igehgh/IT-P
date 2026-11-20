@@ -1715,6 +1715,17 @@
   const CLOUD_DEFAULT={"url":"https://wudlwffzhtyypvdeacuz.supabase.co","key":"sb_publishable_LukYLbGF6e5T55Q1TjqmlA_DEvhubfV"};
   let cloudConfig=CLOUD_DEFAULT;
   try{cloudConfig=JSON.parse(localStorage.getItem('dit-cloud-config')||'null')||CLOUD_DEFAULT}catch{}
+  // 旧项目 xdfprofjvijcvsquoeie 已因 RESTORE_FAILED 废弃（数据库不可访问）。
+  // 浏览器里若残留指向它的历史配置，会导致登录/注册都报“云端操作失败”。
+  // 这里自动迁移到当前项目，并清掉该项目的旧会话与缓存。
+  const RETIRED_HOSTS=['xdfprofjvijcvsquoeie.supabase.co'];
+  try{
+    if(cloudConfig.url&&RETIRED_HOSTS.includes(new URL(cloudConfig.url).hostname)){
+      cloudConfig=Object.assign({},CLOUD_DEFAULT);
+      try{localStorage.setItem('dit-cloud-config',JSON.stringify(cloudConfig))}catch{}
+      Object.keys(localStorage).filter(k=>k.indexOf('xdfprofjvijcvsquoeie')>=0).forEach(k=>{try{localStorage.removeItem(k)}catch{}});
+    }
+  }catch{}
   const cloudConfigExplicit=!!localStorage.getItem('dit-cloud-config');
   const cloud={client:null,user:null,rows:{},roles:{},conflicts:{},busy:false,loading:false,timer:null,channel:null,status:'',accountKey:'',sessionGeneration:0};
   const localRead=localStateStore.read.bind(localStateStore),localWrite=localStateStore.write.bind(localStateStore);
